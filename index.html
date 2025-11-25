@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Falling Letters Survival</title>
+    <style>
+        /* CSS SECTION */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace; /* Monospace font */
+            overflow: hidden; /* Prevent scrolling */
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to hidden input if needed */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        #timer-display {
+            font-size: 24px;
+            font-weight: bold;
+            text-align: right;
+            padding: 20px;
+            text-shadow: 0 0 5px #000;
+        }
+
+        /* Game Over Screen */
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+            color: #ff3333;
+            text-transform: uppercase;
+        }
+
+        p {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 20px;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #00ff00;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #fff;
+        }
+
+        /* Hidden input to ensure mobile keyboard works if screen is tapped */
+        #mobile-input {
+            position: absolute;
+            opacity: 0;
+            top: -1000px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <!-- UI Layer -->
+        <div id="ui-layer">
+            <div id="timer-display">Time: 0.0s</div>
+        </div>
+
+        <!-- Game Over Modal -->
+        <div id="game-over-screen">
+            <h1>Game Over</h1>
+            <p id="final-score">You survived: 0.0s</p>
+            <button id="restart-btn">Play Again</button>
+        </div>
+
+        <!-- Hidden Input for Mobile Compatibility -->
+        <input type="text" id="mobile-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+
+    <script>
+        /**
+         * JAVASCRIPT SECTION
+         * Complete game logic, loop, and state management.
+         */
+
+        // --- Configuration & State ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const timerDisplay = document.getElementById('timer-display');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const restartBtn = document.getElementById('restart-btn');
+        const mobileInput = document.getElementById('mobile-input');
+
+        // Game State
+        let isRunning = false;
+        let lastTime = 0;
+        let startTime = 0;
+        let elapsedTime = 0; // in seconds
+        let animationFrameId;
+
+        // Entities
+        let letters = []; 
+        
+        // Spawning Logic
+        let nextSpawnTime = 0;
+        
+        // Difficulty Parameters
+        const INITIAL_SPAWN_INTERVAL = 1500; // ms
+        const MIN_SPAWN_INTERVAL = 400; // ms
+        const INITIAL_SPEED = 100; // pixels per second
+        
+        // Font Settings
+        const FONT_SIZE = 30;
+        ctx.font = `bold ${FONT_SIZE}px "Courier New", monospace`;
+
+        // --- Setup & Resize ---
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            // Re-apply font after resize as canvas reset clears context state
+            ctx.font = `bold ${FONT_SIZE}px "Courier New", monospace`;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Core Game Functions ---
+
+        class FallingLetter {
+            constructor() {
+                // Random A-Z
+                const charCode = 65 + Math.floor(Math.random() * 26);
+                this.char = String.fromCharCode(charCode);
+                
+                // Position: Ensure it spawns fully within horizontal bounds
+                const margin = 50;
+                this.x = margin + Math.random() * (canvas.width - margin * 2);
+                this.y = -40; // Start slightly above screen
+                
+                this.color = '#ffffff';
+                this.caught = false;
+                
+                // Calculate difficulty multiplier based on survival time
+                // Speed increases by 5% every 10 seconds roughly
+                const timeFactor = 1 + (elapsedTime / 20); 
+                this.speed = INITIAL_SPEED * timeFactor;
+                
+                // Fall wobble (optional visual flair)
+                this.xOffset = Math.random() * 100;
+            }
+
+            update(dt) {
+                // Move down
+                this.y += this.speed * dt;
+
+                // Game Over Check: 
+                // If it hits bottom (canvas.height) AND hasn't been caught
+                if (this.y > canvas.height && !this.caught) {
+                    return 'dead'; 
+                }
+                
+                // Cleanup: If caught and off screen, remove it
+                if (this.y > canvas.height && this.caught) {
+                    return 'remove';
+                }
+
+                return 'active';
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.fillText(this.char, this.x, this.y);
+            }
+        }
+
+        function startGame() {
+            // Reset State
+            letters = [];
+            isRunning = true;
+            elapsedTime = 0;
+            startTime = Date.now();
+            lastTime = Date.now();
+            nextSpawnTime = 0; // Spawn immediately
+            
+            // UI Reset
+            gameOverScreen.style.display = 'none';
+            timerDisplay.textContent = 'Time: 0.0s';
+            
+            // Focus hidden input for mobile keyboard support
+            mobileInput.value = '';
+            mobileInput.focus();
+
+            // Start Loop
+            cancelAnimationFrame(animationFrameId);
+            loop();
+        }
+
+        function endGame() {
+            isRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            
+            finalScoreDisplay.textContent = `You survived: ${elapsedTime.toFixed(1)}s`;
+            gameOverScreen.style.display = 'flex';
+        }
+
+        function spawnLetter() {
+            letters.push(new FallingLetter());
+
+            // Calculate next spawn interval based on difficulty
+            // Interval gets smaller as time goes on
+            const timeFactor = Math.min(elapsedTime / 60, 1); // Cap difficulty scaling at 60s
+            // Interpolate between Initial and Min interval
+            const currentInterval = INITIAL_SPAWN_INTERVAL - (timeFactor * (INITIAL_SPAWN_INTERVAL - MIN_SPAWN_INTERVAL));
+            
+            nextSpawnTime = Date.now() + currentInterval;
+        }
+
+        // --- The Game Loop ---
+        function loop() {
+            if (!isRunning) return;
+
+            const now = Date.now();
+            const dt = (now - lastTime) / 1000; // Delta time in seconds
+            lastTime = now;
+
+            // Update Time
+            elapsedTime = (now - startTime) / 1000;
+            timerDisplay.textContent = `Time: ${elapsedTime.toFixed(1)}s`;
+
+            // Clear Screen
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Spawning
+            if (now >= nextSpawnTime) {
+                spawnLetter();
+            }
+
+            // Update & Draw Letters
+            // Iterate backwards so we can remove items safely if needed
+            for (let i = letters.length - 1; i >= 0; i--) {
+                const letter = letters[i];
+                const status = letter.update(dt);
+
+                if (status === 'dead') {
+                    endGame();
+                    return; // Stop processing frame immediately
+                } else if (status === 'remove') {
+                    letters.splice(i, 1);
+                } else {
+                    letter.draw(ctx);
+                }
+            }
+
+            animationFrameId = requestAnimationFrame(loop);
+        }
+
+        // --- Input Handling ---
+
+        function handleInput(key) {
+            if (!isRunning) return;
+            
+            const upperKey = key.toUpperCase();
+
+            // Find all matching active letters that aren't caught yet
+            const matches = letters.filter(l => l.char === upperKey && !l.caught);
+
+            if (matches.length > 0) {
+                // Sort by Y position descending (catch the one closest to bottom first)
+                matches.sort((a, b) => b.y - a.y);
+                
+                const target = matches[0];
+                target.caught = true;
+                target.color = '#00ff00'; // Bright Green
+                
+                // Visual feedback: bump it slightly or just let it fall green
+                // (Requirement says: change color, mark caught. Optional removal done in update loop)
+            }
+        }
+
+        // Desktop Keyboard
+        window.addEventListener('keydown', (e) => {
+            // Ignore modifier keys
+            if (e.key.length === 1 && e.key.match(/[a-z]/i)) {
+                handleInput(e.key);
+            }
+        });
+
+        // Mobile/Virtual Keyboard Helper
+        // When user taps screen, focus input to bring up keyboard
+        document.addEventListener('click', (e) => {
+            // Don't refocus if clicking buttons
+            if (e.target.tagName !== 'BUTTON') {
+                mobileInput.focus();
+            }
+        });
+
+        // Listen to input on the hidden field for mobile support
+        mobileInput.addEventListener('input', (e) => {
+            if (e.data) {
+                const char = e.data.slice(-1); // Get last char typed
+                if (char.match(/[a-z]/i)) {
+                    handleInput(char);
+                }
+            }
+            // Keep input clear to avoid overflow issues
+            mobileInput.value = '';
+        });
+
+        // Restart Button
+        restartBtn.addEventListener('click', startGame);
+
+        // Start first game on load (or show a "Click to Start" overlay - but Prompt implies direct entry)
+        // We'll show the game over screen initially with "Start Game" text logic or just auto-start.
+        // For better UX, let's treat the initial load as a "Game Over" state so user clicks to start.
+        
+        // Initial State Setup
+        gameOverScreen.style.display = 'flex';
+        document.querySelector('#game-over-screen h1').textContent = "TYPE SURVIVOR";
+        document.querySelector('#game-over-screen p').textContent = "Type the falling letters to survive.";
+        document.getElementById('restart-btn').textContent = "Start Game";
+
+    </script>
+</body>
+</html>
